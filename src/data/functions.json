@@ -447,23 +447,18 @@
   },
   {
     "name": "pass_cards",
-    "description": "Передает карты от каждого игрока следующему игроку по кругу.",
+    "description": "Передаёт карты от каждого игрока следующему (nextplayerid) в рамках одной игровой сессии, если игроков достаточно (2 и более).",
     "parameters": [
-      {
-        "name": "_token",
-        "type": "UUID",
-        "description": "Токен сессии пользователя."
-      },
       {
         "name": "_session_id",
         "type": "INT",
-        "description": "Идентификатор сессии."
+        "description": "Идентификатор игровой сессии, в которой выполняется передача карт."
       }
     ],
     "returns": "JSON",
-    "usage": "SELECT pass_cards('uuid-токена', 123);",
-    "exampleReturns": "{ \"success\": true, \"message\": \"Все игроки успешно передали карты следующему игроку\" }",
-    "code": "CREATE OR REPLACE FUNCTION pass_cards(_token UUID, _session_id INT) RETURNS JSON AS $$\nDECLARE\n    is_token_valid BOOLEAN;\n    validated_user_id INT;\n    current_player_count INT;\nBEGIN\n    -- Проверяем токен\n    is_token_valid := validate_token(_token);\n    IF NOT is_token_valid THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Ошибка: Неверный или просроченный токен'\n        );\n    END IF;\n    \n    SELECT user_id INTO validated_user_id FROM session_tokens WHERE token = _token;\n    IF NOT EXISTS (\n        SELECT 1 FROM Players WHERE userid = validated_user_id AND sessionid = _session_id\n    ) THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Ошибка: Пользователь не является участником сессии'\n        );\n    END IF;\n    \n    SELECT COUNT(*) INTO current_player_count FROM Players WHERE sessionid = _session_id;\n    IF current_player_count < 2 THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Ошибка: Недостаточно игроков для передачи карт'\n        );\n    END IF;\n    \n    WITH pass_map AS (\n        SELECT p.playerid AS old_owner, p.nextplayerid AS new_owner\n        FROM Players p\n        WHERE p.sessionid = _session_id\n    )\n    UPDATE PlayerCards pc\n    SET playerid = pass_map.new_owner\n    FROM pass_map\n    WHERE pc.playerid = pass_map.old_owner;\n    \n    RETURN json_build_object(\n        'success', TRUE,\n        'message', 'Все игроки успешно передали карты следующему игроку'\n    );\nEND;\n$$ LANGUAGE plpgsql;"
+    "usage": "SELECT pass_cards(123);",
+    "exampleReturns": "{ \"success\": true, \"message\": \"Все игроки передали карты следующему игроку.\" }",
+    "code": "CREATE OR REPLACE FUNCTION pass_cards(\n    _session_id INT\n) RETURNS JSON AS $$\nDECLARE\n    current_player_count INT;\nBEGIN\n    -- 1. Убедимся, что в сессии достаточно игроков (не менее двух)\n    SELECT COUNT(*) INTO current_player_count\n    FROM Players\n    WHERE sessionid = _session_id;\n\n    IF current_player_count < 2 THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Недостаточно игроков, чтобы передавать карты'\n        );\n    END IF;\n\n    -- 2. Передаём карты при помощи CTE, чтобы переопределить владельца (playerid) на nextplayerid\n    WITH pass_map AS (\n        SELECT p.playerid AS old_owner,\n               p.nextplayerid AS new_owner\n        FROM Players p\n        WHERE p.sessionid = _session_id\n    )\n    UPDATE PlayerCards pc\n    SET playerid = pass_map.new_owner\n    FROM pass_map\n    WHERE pc.playerid = pass_map.old_owner;\n\n    -- 3. Возвращаем успешный результат\n    RETURN json_build_object(\n        'success', TRUE,\n        'message', 'Все игроки передали карты следующему игроку'\n    );\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "compute_maki_rolls",
