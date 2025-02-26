@@ -125,6 +125,26 @@
     "code": "CREATE OR REPLACE FUNCTION get_sessions(token UUID) RETURNS JSON AS $$\nDECLARE\n    is_token_valid BOOLEAN;\n    sessions JSON;\nBEGIN\n    -- Проверяем токен\n    is_token_valid := validate_token(token);\n    IF NOT is_token_valid THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'result_message', 'Ошибка: Неверный или просроченный токен'\n        );\n    END IF;\n    \n    -- Получаем все сессии\n    SELECT json_agg(\n        json_build_object(\n            'session_id', sessionid,\n            'session_name', sessionname,\n            'move_duration', moveduration,\n            'round_number', roundnumber,\n            'session_date', sessiondate,\n            'player_count', playercount\n        )\n    ) INTO sessions\n    FROM GameSessions;\n    \n    IF sessions IS NULL THEN\n        RETURN json_build_object(\n            'success', TRUE,\n            'result_message', 'Сессии не найдены',\n            'sessions', json_build_array()\n        );\n    END IF;\n    \n    RETURN json_build_object(\n        'success', TRUE,\n        'result_message', 'Сессии успешно получены!',\n        'sessions', sessions\n    );\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
+    "name": "get_session",
+    "description": "Возвращает информацию о сессии (GameSessions) по её идентификатору, проверяя при этом валидность токена.",
+    "parameters": [
+      {
+        "name": "token",
+        "type": "UUID",
+        "description": "Токен сессии, подтверждающий авторизацию пользователя."
+      },
+      {
+        "name": "session_id",
+        "type": "INT",
+        "description": "Идентификатор игровой сессии, данные о которой необходимо получить."
+      }
+    ],
+    "returns": "JSON",
+    "usage": "SELECT get_session('uuid-токена', 123);",
+    "exampleReturns": "{ \"success\": true, \"result_message\": \"Сессия успешно получена!\", \"session\": { \"session_id\": 123, \"session_name\": \"Пример\" } }",
+    "code": "CREATE OR REPLACE FUNCTION get_session(token UUID, session_id INT)\nRETURNS JSON AS $$\n\nDECLARE\n    is_token_valid BOOLEAN;\n    session JSON;\nBEGIN\n    -- Валидируем предоставленный токен\n    is_token_valid := validate_token(token);\n\n    IF NOT is_token_valid THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'result_message', 'Ошибка: Токен недействителен или просрочен'\n        );\n    END IF;\n\n    -- Извлекаем данные сессии по указанному session_id\n    SELECT json_build_object(\n        'session_id', sessionid,\n        'session_name', sessionname,\n        'move_duration', moveduration,\n        'round_number', roundnumber,\n        'session_date', sessiondate,\n        'current_player_count', current_player_count,\n        'max_player_count', max_player_count\n    )\n    INTO session\n    FROM GameSessions\n    WHERE sessionid = get_session.session_id;\n\n    -- Если сессия не найдена, возвращаем соответствующее сообщение\n    IF session IS NULL THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'result_message', 'Сессия с данным session_id не найдена'\n        );\n    END IF;\n\n    -- Возвращаем успешный результат вместе с данными сессии\n    RETURN json_build_object(\n        'success', TRUE,\n        'result_message', 'Сессия успешно получена!',\n        'session', session\n    );\nEND;\n$$ LANGUAGE plpgsql;"
+  },
+  {
     "name": "delete_session",
     "description": "Удаляет игровую сессию по session_id после проверки токена.",
     "parameters": [
@@ -255,6 +275,26 @@
     "code": "CREATE OR REPLACE FUNCTION increment_round(session_id INT) RETURNS VOID AS $$\nBEGIN\n    UPDATE GameSessions\n    SET roundnumber = roundnumber + 1\n    WHERE sessionid = session_id;\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
+    "name": "get_session_players",
+    "description": "Возвращает список игроков, подключившихся к указанной сессии, и проверяет, достигнуто ли максимальное число игроков. Также проверяет валидность токена.",
+    "parameters": [
+      {
+        "name": "_token",
+        "type": "UUID",
+        "description": "Токен сессии для проверки."
+      },
+      {
+        "name": "_session_id",
+        "type": "INT",
+        "description": "Идентификатор игровой сессии."
+      }
+    ],
+    "returns": "JSON",
+    "usage": "SELECT get_session_players('uuid-токена', 123);",
+    "exampleReturns": "{ \"success\": true, \"players\": [ { \"player_id\": 1, \"username\": \"UserA\" }, ... ], \"current_player_count\": 4, \"max_player_count\": 4, \"ready_to_start\": true }",
+    "code": "CREATE OR REPLACE FUNCTION get_session_players(_token UUID, _session_id INT)\nRETURNS JSON AS $$\nDECLARE\n    is_token_valid BOOLEAN;\n    session_player_count INT;\n    joined_players JSON;\n    max_players INT;\nBEGIN\n    -- Валидируем токен\n    is_token_valid := validate_token(_token);\n\n    IF NOT is_token_valid THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'result_message', 'Ошибка: Токен недействителен или просрочен'\n        );\n    END IF;\n\n    -- Получаем максимальное число игроков для сессии\n    SELECT max_player_count INTO max_players\n    FROM gamesessions\n    WHERE sessionid = _session_id;\n\n    -- Считаем текущее число подключившихся игроков\n    SELECT COUNT(*) INTO session_player_count\n    FROM players\n    WHERE sessionid = _session_id;\n\n    -- Получаем список подключившихся игроков\n    SELECT json_agg(\n        json_build_object(\n            'player_id', p.playerid,\n            'username', u.username\n        )\n    ) INTO joined_players\n    FROM players p\n    JOIN users u ON p.userid = u.userid\n    WHERE p.sessionid = _session_id;\n\n    RETURN json_build_object(\n        'success', TRUE,\n        'result_message', 'Игроки сессии успешно получены!',\n        'players', COALESCE(joined_players, '[]'::json),\n        'current_player_count', session_player_count,\n        'max_player_count', max_players,\n        'ready_to_start', session_player_count = max_players\n    );\nEND;\n$$ LANGUAGE plpgsql;"
+  },
+  {
     "name": "deal_cards",
     "description": "Раздаёт карты игрокам в сессии, распределяя их по кругу.",
     "parameters": [
@@ -290,34 +330,120 @@
     "code": "CREATE OR REPLACE FUNCTION start_session(session_id INT) RETURNS VOID AS $$\nDECLARE\n    player_count INT;\n    cards_per_player INT;\nBEGIN\n    SELECT playercount INTO player_count FROM GameSessions WHERE sessionid = session_id;\n    CASE\n        WHEN player_count = 2 THEN cards_per_player := 10;\n        WHEN player_count = 3 THEN cards_per_player := 9;\n        WHEN player_count = 4 THEN cards_per_player := 8;\n        WHEN player_count = 5 THEN cards_per_player := 7;\n        ELSE\n            RAISE EXCEPTION 'Неверное количество игроков для сессии: %', player_count;\n    END CASE;\n    PERFORM update_session_status(session_id, 'ongoing');\n    PERFORM initialize_session_cards(session_id);\n    PERFORM deal_cards(session_id, cards_per_player);\n    PERFORM increment_round(session_id);\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
-    "name": "place_card_on_table",
-    "description": "Размещает карту из руки игрока на столе, удаляя её из PlayerCards и добавляя в TableCards.",
+    "name": "start_new_round",
+    "description": "Запускает новый раунд в указанной сессии. Удаляет карты со стола (кроме Pudding), раздаёт новые карты игрокам и увеличивает номер текущего раунда.",
+    "parameters": [
+      {
+        "name": "session_id",
+        "type": "INT",
+        "description": "Идентификатор игровой сессии, в которой необходимо начать новый раунд."
+      }
+    ],
+    "returns": "VOID",
+    "usage": "SELECT start_new_round(123);",
+    "exampleReturns": "Функция не возвращает значение (VOID). При возникновении ошибок может генерировать исключения.",
+    "code": "CREATE OR REPLACE FUNCTION start_new_round(session_id INT)\nRETURNS VOID AS $$\nDECLARE\n    current_round INT;\n    player_count INT;\n    cards_per_player INT;\nBEGIN\n    -- 1. Получаем текущий номер раунда из таблицы GameSessions\n    SELECT roundnumber INTO current_round\n    FROM GameSessions\n    WHERE sessionid = session_id;\n\n    -- Проверяем, не достигнут ли максимальный раунд\n    IF current_round >= 3 THEN\n        RAISE EXCEPTION 'Достигнут максимальный раунд для сессии %', session_id;\n    END IF;\n\n    -- 2. Удаляем карты со стола, кроме категории 'Pudding'\n    DELETE FROM TableCards\n    USING SessionCards sc, Cards c\n    WHERE TableCards.sessioncardid = sc.sessioncardid\n      AND sc.cardid = c.cardid\n      AND sc.sessionid = session_id\n      AND c.category <> 'Pudding';\n\n    RAISE NOTICE 'Очищены карты (кроме Pudding) для сессии %', session_id;\n\n    -- 3. Получаем текущее количество игроков\n    SELECT current_player_count INTO player_count\n    FROM GameSessions\n    WHERE sessionid = session_id;\n\n    -- 4. Рассчитываем, сколько карт нужно раздать каждому игроку\n    CASE\n        WHEN player_count = 2 THEN cards_per_player := 10;\n        WHEN player_count = 3 THEN cards_per_player := 9;\n        WHEN player_count = 4 THEN cards_per_player := 8;\n        WHEN player_count = 5 THEN cards_per_player := 7;\n        ELSE\n            RAISE EXCEPTION 'Недопустимое количество игроков: %', player_count;\n    END CASE;\n\n    RAISE NOTICE 'Раздача % карт каждому из % игроков', cards_per_player, player_count;\n\n    -- 6. Раздаём карты игрокам с помощью функции deal_cards\n    PERFORM deal_cards(session_id, cards_per_player);\n\n    -- 7. Увеличиваем номер раунда с помощью функции increment_round\n    PERFORM increment_round(session_id);\n\n    RAISE NOTICE 'Новый раунд успешно начат для сессии %', session_id;\nEND;\n$$ LANGUAGE plpgsql;"
+  },
+
+  {
+    "name": "get_player_cards",
+    "description": "Возвращает карты игрока (PlayerCards + SessionCards + Cards) для указанной игровой сессии, проверяя валидность токена и принадлежность пользователя к сессии.",
     "parameters": [
       {
         "name": "_token",
         "type": "UUID",
-        "description": "Токен сессии пользователя."
+        "description": "Токен сессии пользователя для валидации."
       },
       {
         "name": "_session_id",
         "type": "INT",
-        "description": "Идентификатор сессии."
+        "description": "Идентификатор игровой сессии."
+      }
+    ],
+    "returns": "JSON",
+    "usage": "SELECT get_player_cards('uuid-токена', 123);",
+    "exampleReturns": "{ \"success\": true, \"result_message\": \"Карты игрока получены!\", \"cards\": [ { \"card_id\": 1, \"card_type\": \"Nigiri\", ... } ] }",
+    "code": "CREATE OR REPLACE FUNCTION get_player_cards(_token UUID, _session_id INT)\nRETURNS JSON AS $$\nDECLARE\n    validated_user_id INT;\n    current_player_id INT;\n    player_cards JSON;\nBEGIN\n    -- Валидируем предоставленный токен\n    IF NOT validate_token(_token) THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'result_message', 'Ошибка: Токен недействителен или просрочен'\n        );\n    END IF;\n\n    -- Извлекаем user_id на основе токена\n    SELECT st.user_id INTO validated_user_id\n    FROM session_tokens st\n    WHERE st.token = _token;\n\n    -- Определяем, есть ли у данного пользователя игрок в указанной сессии\n    SELECT p.playerid INTO current_player_id\n    FROM players p\n    WHERE p.userid = validated_user_id\n      AND p.sessionid = _session_id;\n\n    IF current_player_id IS NULL THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'result_message', 'Ошибка: Пользователь не участвует в этой сессии'\n        );\n    END IF;\n\n    -- Получаем карты игрока путём объединения таблиц PlayerCards, SessionCards и Cards\n    SELECT json_agg(\n             json_build_object(\n               'playercard_sessioncardid', pc.sessioncardid,\n               'card_id', c.cardid,\n               'card_type', c.cardtype,\n               'card_description', c.carddescription,\n               'points', c.points,\n               'dealt', sc.dealt\n             )\n           )\n    INTO player_cards\n    FROM playercards pc\n    JOIN sessioncards sc ON pc.sessioncardid = sc.sessioncardid\n    JOIN cards c ON sc.cardid = c.cardid\n    WHERE pc.playerid = current_player_id;\n\n    RETURN json_build_object(\n         'success', TRUE,\n         'result_message', 'Карты игрока успешно получены!',\n         'cards', COALESCE(player_cards, '[]'::JSON)\n    );\nEND;\n$$ LANGUAGE plpgsql;"
+  },
+  {
+    "name": "get_player_table_cards",
+    "description": "Возвращает карты на столе для конкретного игрока в заданной сессии. Проверяет токен и принадлежность пользователя к сессии.",
+    "parameters": [
+      {
+        "name": "_token",
+        "type": "UUID",
+        "description": "Токен сессии для проверки."
+      },
+      {
+        "name": "_session_id",
+        "type": "INT",
+        "description": "Идентификатор игровой сессии."
+      }
+    ],
+    "returns": "JSON",
+    "usage": "SELECT get_player_table_cards('uuid-токена', 123);",
+    "exampleReturns": "{ \"success\": true, \"result_message\": \"Карты со стола получены\", \"table_cards\": [ ... ] }",
+    "code": "CREATE OR REPLACE FUNCTION get_player_table_cards(_token UUID, _session_id INT)\nRETURNS JSON AS $$\nDECLARE\n    validated_user_id INT;\n    current_player_id INT;\n    table_cards JSON;\nBEGIN\n    -- Проверяем токен\n    IF NOT validate_token(_token) THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'result_message', 'Ошибка: Токен недействителен или просрочен'\n        );\n    END IF;\n\n    -- Получаем user_id по токену\n    SELECT st.user_id INTO validated_user_id\n    FROM session_tokens st\n    WHERE st.token = _token;\n\n    -- Определяем playerid текущего пользователя в этой сессии\n    SELECT p.playerid INTO current_player_id\n    FROM players p\n    WHERE p.userid = validated_user_id\n      AND p.sessionid = _session_id;\n\n    IF current_player_id IS NULL THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'result_message', 'Ошибка: Пользователь не участвует в этой сессии'\n        );\n    END IF;\n\n    -- Извлекаем \"верхние\" карты на столе (те, под которыми нет других карт)\n    SELECT json_agg(\n               json_build_object(\n                   'tablecard_id', tc.tablecardid,\n                   'sessioncard_id', tc.sessioncardid,\n                   'card_id', c.cardid,\n                   'card_type', c.cardtype,\n                   'card_description', c.carddescription,\n                   'points', c.points,\n                   'under_table_card', get_under_table_card(tc.under_tablecardid)\n               )\n           )\n    INTO table_cards\n    FROM tablecards tc\n    JOIN sessioncards sc ON tc.sessioncardid = sc.sessioncardid\n    JOIN cards c ON sc.cardid = c.cardid\n    WHERE tc.playerid = current_player_id\n      AND sc.sessionid = _session_id\n      AND NOT EXISTS (\n             SELECT 1 FROM tablecards t2 WHERE t2.under_tablecardid = tc.tablecardid\n      );\n\n    RETURN json_build_object(\n         'success', TRUE,\n         'result_message', 'Карты игрока на столе успешно получены!',\n         'table_cards', COALESCE(table_cards, '[]'::JSON)\n    );\nEND;\n$$ LANGUAGE plpgsql;"
+  },
+  {
+    "name": "get_table_cards",
+    "description": "Возвращает все карты на столе для всех игроков указанной сессии. Проверяет валидность токена.",
+    "parameters": [
+      {
+        "name": "_token",
+        "type": "UUID",
+        "description": "Токен пользователя."
+      },
+      {
+        "name": "_session_id",
+        "type": "INT",
+        "description": "Идентификатор игровой сессии."
+      }
+    ],
+    "returns": "JSON",
+    "usage": "SELECT get_table_cards('uuid-токена', 123);",
+    "exampleReturns": "{ \"success\": true, \"result_message\": \"Карты на столе получены\", \"players\": [ { \"player_id\": 10, \"cards\": [ ... ] }, ... ] }",
+    "code": "CREATE OR REPLACE FUNCTION get_table_cards(_token UUID, _session_id INT)\nRETURNS JSON AS $$\nDECLARE\n    players_cards JSON;\nBEGIN\n    -- Проверяем валидность токена\n    IF NOT validate_token(_token) THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'result_message', 'Ошибка: Токен недействителен или просрочен'\n        );\n    END IF;\n\n    -- Получаем все карты на столе по всем игрокам сессии\n    SELECT json_agg(player_data)\n    INTO players_cards\n    FROM (\n        SELECT\n            p.playerid AS player_id,\n            COALESCE(\n                (\n                    SELECT json_agg(\n                        json_build_object(\n                            'tablecard_id', tc.tablecardid,\n                            'sessioncard_id', tc.sessioncardid,\n                            'card_id', c.cardid,\n                            'card_type', c.cardtype,\n                            'card_description', c.carddescription,\n                            'points', c.points,\n                            'under_table_card_id', get_under_table_card(tc.under_tablecardid)\n                        )\n                    )\n                    FROM tablecards tc\n                    JOIN sessioncards sc ON tc.sessioncardid = sc.sessioncardid\n                    JOIN cards c ON sc.cardid = c.cardid\n                    WHERE tc.playerid = p.playerid\n                      AND sc.sessionid = _session_id\n                ), '[]'::json\n            ) AS cards\n        FROM players p\n        WHERE p.sessionid = _session_id\n    ) AS player_data;\n\n    RETURN json_build_object(\n         'success', TRUE,\n         'result_message', 'Карты на столе для данной сессии получены!',\n         'players', COALESCE(players_cards, '[]'::json)\n    );\nEND;\n$$ LANGUAGE plpgsql;"
+  },
+  {
+    "name": "get_under_table_card",
+    "description": "Рекурсивно возвращает карту, которая лежит под другой картой (если такая есть), вместе с её подчинёнными картами.",
+    "parameters": [
+      {
+        "name": "_under_tablecardid",
+        "type": "INT",
+        "description": "Идентификатор записи в TableCards, которая лежит под другой картой."
+      }
+    ],
+    "returns": "JSON",
+    "usage": "SELECT get_under_table_card(456);",
+    "exampleReturns": "{ \"tablecard_id\": 456, \"sessioncard_id\": 789, \"card_id\": 12, ... }",
+    "code": "CREATE OR REPLACE FUNCTION get_under_table_card(_under_tablecardid INT)\nRETURNS JSON AS $$\nDECLARE\n    under_card JSON;\nBEGIN\n    IF _under_tablecardid IS NULL THEN\n        RETURN NULL;\n    END IF;\n\n    SELECT json_build_object(\n               'tablecard_id', tc.tablecardid,\n               'sessioncard_id', tc.sessioncardid,\n               'card_id', c.cardid,\n               'card_type', c.cardtype,\n               'card_description', c.carddescription,\n               'points', c.points,\n               'under_table_card', get_under_table_card(tc.under_tablecardid)\n           )\n    INTO under_card\n    FROM tablecards tc\n    JOIN sessioncards sc ON tc.sessioncardid = sc.sessioncardid\n    JOIN cards c ON sc.cardid = c.cardid\n    WHERE tc.tablecardid = _under_tablecardid;\n\n    RETURN under_card;\nEND;\n$$ LANGUAGE plpgsql;"
+  },
+  {
+    "name": "place_card_on_table",
+    "description": "Перемещает карту из руки игрока (PlayerCards) на стол (TableCards), учитывая логику укладки (Wasabi, Nigiri и т. д.). Проверяет валидность токена и принадлежность пользователя к сессии.",
+    "parameters": [
+      {
+        "name": "_token",
+        "type": "UUID",
+        "description": "Токен сессии."
+      },
+      {
+        "name": "_session_id",
+        "type": "INT",
+        "description": "Идентификатор сессии, в которой пользователь выкладывает карту."
       },
       {
         "name": "_sessioncard_id",
         "type": "INT",
-        "description": "Идентификатор карты сессии."
-      },
-      {
-        "name": "_under_table_card_id",
-        "type": "INT",
-        "description": "Идентификатор карты, под которой будет размещена текущая (опционально)."
+        "description": "Идентификатор карты (SessionCards), которую нужно выложить на стол."
       }
     ],
     "returns": "JSON",
-    "usage": "SELECT place_card_on_table('uuid-токена', 123, 456, 789);",
-    "exampleReturns": "{ \"success\": true, \"message\": \"Карта успешно размещена на столе\", \"player_id\": 456, \"sessioncard_id\": 456, \"under_table_card_id\": 789 }",
-    "code": "CREATE OR REPLACE FUNCTION place_card_on_table(_token UUID, _session_id INT, _sessioncard_id INT, _under_table_card_id INT DEFAULT NULL) RETURNS JSON AS $$\nDECLARE\n    validated_user_id INT;\n    current_player_id INT;\n    row_exists BOOLEAN;\nBEGIN\n    -- Проверяем токен\n    IF NOT validate_token(_token) THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Ошибка: Неверный или просроченный токен'\n        );\n    END IF;\n    \n    -- Получаем идентификатор игрока\n    SELECT st.user_id INTO validated_user_id FROM session_tokens st WHERE st.token = _token;\n    SELECT p.playerid INTO current_player_id FROM Players p WHERE p.userid = validated_user_id AND p.sessionid = _session_id;\n    IF current_player_id IS NULL THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Ошибка: Пользователь не является участником сессии'\n        );\n    END IF;\n    \n    -- Проверяем, есть ли карта у игрока\n    SELECT EXISTS (\n        SELECT 1\n        FROM PlayerCards pc\n        JOIN SessionCards sc ON pc.sessioncardid = sc.sessioncardid\n        WHERE pc.playerid = current_player_id\n          AND pc.sessioncardid = _sessioncard_id\n          AND sc.sessionid = _session_id\n    ) INTO row_exists;\n    IF NOT row_exists THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Ошибка: Карта отсутствует в руке игрока'\n        );\n    END IF;\n    \n    DELETE FROM PlayerCards WHERE playerid = current_player_id AND sessioncardid = _sessioncard_id;\n    \n    INSERT INTO TableCards (playerid, sessioncardid, under_tablecardid)\n    VALUES (current_player_id, _sessioncard_id, _under_table_card_id);\n    \n    RETURN json_build_object(\n        'success', TRUE,\n        'message', 'Карта успешно размещена на столе',\n        'player_id', current_player_id,\n        'sessioncard_id', _sessioncard_id,\n        'under_table_card_id', _under_table_card_id\n    );\nEND;\n$$ LANGUAGE plpgsql;"
+    "usage": "SELECT place_card_on_table('uuid-токена', 123, 456);",
+    "exampleReturns": "{ \"success\": true, \"message\": \"Карта успешно выложена!\", \"player_id\": 10, \"sessioncard_id\": 456 }",
+    "code": "CREATE OR REPLACE FUNCTION place_card_on_table(\n    _token UUID,\n    _session_id INT,\n    _sessioncard_id INT\n)\nRETURNS JSON AS $$\nDECLARE\n    validated_user_id INT;\n    current_player_id INT;\n    row_exists BOOLEAN;\n    card_type TEXT;\n    under_table_card_id INT DEFAULT NULL;\nBEGIN\n    -- 1. Валидируем токен\n    IF NOT validate_token(_token) THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Ошибка: Токен недействителен или просрочен'\n        );\n    END IF;\n\n    -- 2. Получаем user_id по токену\n    SELECT st.user_id INTO validated_user_id\n    FROM session_tokens st\n    WHERE st.token = _token;\n\n    -- 3. Определяем, есть ли игрок с данным user_id в этой сессии\n    SELECT p.playerid INTO current_player_id\n    FROM Players p\n    WHERE p.userid = validated_user_id\n      AND p.sessionid = _session_id;\n\n    IF current_player_id IS NULL THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Ошибка: Пользователь не участвует в этой сессии'\n        );\n    END IF;\n\n    -- 4. Проверяем, есть ли у игрока нужная карта\n    SELECT EXISTS (\n        SELECT 1\n        FROM PlayerCards pc\n        JOIN SessionCards sc ON pc.sessioncardid = sc.sessioncardid\n        WHERE pc.playerid = current_player_id\n          AND pc.sessioncardid = _sessioncard_id\n          AND sc.sessionid = _session_id\n    ) INTO row_exists;\n\n    IF NOT row_exists THEN\n        RETURN json_build_object(\n            'success', FALSE,\n            'message', 'Ошибка: Карты нет в руке игрока'\n        );\n    END IF;\n\n    -- 5. Определяем тип карты\n    SELECT c.cardtype INTO card_type\n    FROM SessionCards sc\n    JOIN Cards c ON sc.cardid = c.cardid\n    WHERE sc.sessioncardid = _sessioncard_id\n      AND sc.sessionid = _session_id;\n\n    -- 6. Логика стека (Wasabi, Nigiri и т.п.)\n    IF card_type = 'Wasabi' THEN\n        -- Для васаби не нужен under_table_card\n        under_table_card_id := NULL;\n    ELSIF card_type IN ('Egg Nigiri', 'Salmon Nigiri', 'Squid Nigiri') THEN\n        -- Сначала ищем последнюю выложенную карту того же типа (nigiri)\n        SELECT tc.tablecardid INTO under_table_card_id\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE tc.playerid = current_player_id\n          AND sc.sessionid = _session_id\n          AND c.cardtype = card_type\n        ORDER BY tc.tablecardid DESC\n        LIMIT 1;\n\n        IF under_table_card_id IS NULL THEN\n            -- Если такой нигири нет, пытаемся положить на Wasabi\n            SELECT tc.tablecardid INTO under_table_card_id\n            FROM TableCards tc\n            JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n            JOIN Cards c ON sc.cardid = c.cardid\n            WHERE tc.playerid = current_player_id\n              AND sc.sessionid = _session_id\n              AND c.cardtype = 'Wasabi'\n              AND NOT EXISTS (\n                 SELECT 1\n                 FROM TableCards t2\n                 WHERE t2.under_tablecardid = tc.tablecardid\n              )\n            LIMIT 1;\n        END IF;\n    ELSE\n        -- Для прочих типов ищем последнюю выложенную карту такого же типа\n        SELECT tc.tablecardid INTO under_table_card_id\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE tc.playerid = current_player_id\n          AND sc.sessionid = _session_id\n          AND c.cardtype = card_type\n        ORDER BY tc.tablecardid DESC\n        LIMIT 1;\n    END IF;\n\n    -- 7. Удаляем карту из PlayerCards\n    DELETE FROM PlayerCards\n    WHERE playerid = current_player_id\n      AND sessioncardid = _sessioncard_id;\n\n    -- 8. Добавляем карту в TableCards\n    INSERT INTO TableCards (playerid, sessioncardid, under_tablecardid)\n    VALUES (current_player_id, _sessioncard_id, under_table_card_id);\n\n    -- 9. Возвращаем результат\n    RETURN json_build_object(\n        'success', TRUE,\n        'message', 'Карта успешно выложена!',\n        'player_id', current_player_id,\n        'sessioncard_id', _sessioncard_id,\n        'under_table_card_id', under_table_card_id\n    );\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "pass_cards",
@@ -341,108 +467,108 @@
   },
   {
     "name": "compute_maki_rolls",
-    "description": "Вычисляет очки за карты категории 'Maki Roll'. Если несколько игроков набрали максимум, каждый получает 6 очков, иначе второй получает 3 очка.",
+    "description": "Вычисляет очки за Maki Roll для всех игроков в указанной сессии: 6 очков получает(ют) лидер(ы) по количеству Maki, 3 очка — второе место, если первое место занимает только один игрок.",
     "parameters": [
       {
         "name": "session_id",
         "type": "INT",
-        "description": "Идентификатор сессии."
+        "description": "Идентификатор игровой сессии."
       }
     ],
     "returns": "TABLE(playerid INT, points INT)",
     "usage": "SELECT * FROM compute_maki_rolls(123);",
-    "exampleReturns": "[{ \"playerid\": 1, \"points\": 6 }, { \"playerid\": 2, \"points\": 3 }]",
-    "code": "CREATE OR REPLACE FUNCTION compute_maki_rolls(session_id INT) RETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH maki_totals AS (\n        SELECT tc.playerid, COALESCE(SUM(c.points), 0) AS total_maki\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id AND c.category = 'Maki Roll'\n        GROUP BY tc.playerid\n    ),\n    ranked AS (\n        SELECT playerid, total_maki, DENSE_RANK() OVER (ORDER BY total_maki DESC) AS rnk\n        FROM maki_totals\n    ),\n    first_count AS (\n        SELECT COUNT(*) AS cnt FROM ranked WHERE rnk = 1\n    )\n    SELECT r.playerid, CASE\n        WHEN r.rnk = 1 THEN 6\n        WHEN r.rnk = 2 AND (SELECT cnt FROM first_count) = 1 THEN 3\n        ELSE 0\n    END AS points\n    FROM ranked r;\nEND;\n$$ LANGUAGE plpgsql;"
+    "exampleReturns": "[ { \"playerid\": 10, \"points\": 6 }, { \"playerid\": 11, \"points\": 3 } ]",
+    "code": "CREATE OR REPLACE FUNCTION compute_maki_rolls(session_id INT)\nRETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH maki_totals AS (\n        SELECT \n            tc.playerid AS playerid,\n            COALESCE(SUM(c.points), 0) AS total_maki\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id\n          AND c.category = 'Maki Roll'\n        GROUP BY tc.playerid\n    ),\n    ranked AS (\n        SELECT\n            maki_totals.playerid AS playerid,\n            maki_totals.total_maki AS total_maki,\n            DENSE_RANK() OVER (ORDER BY maki_totals.total_maki DESC) AS rnk\n        FROM maki_totals\n    ),\n    first_count AS (\n        SELECT COUNT(*) AS cnt\n        FROM ranked\n        WHERE ranked.rnk = 1\n    )\n    SELECT\n        ranked.playerid AS playerid,\n        CASE\n            WHEN ranked.rnk = 1 THEN 6\n            WHEN ranked.rnk = 2 \n                 AND (SELECT first_count.cnt FROM first_count) = 1\n                 THEN 3\n            ELSE 0\n        END AS points\n    FROM ranked;\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "compute_sashimi",
-    "description": "Вычисляет очки за карты категории 'Sashimi'. Каждый комплект из трех карт дает 10 очков.",
+    "description": "Подсчитывает, сколько наборов по 3 Sashimi есть у каждого игрока в сессии и начисляет за каждый набор по 10 очков.",
     "parameters": [
       {
         "name": "session_id",
         "type": "INT",
-        "description": "Идентификатор сессии."
+        "description": "Идентификатор игровой сессии."
       }
     ],
     "returns": "TABLE(playerid INT, points INT)",
     "usage": "SELECT * FROM compute_sashimi(123);",
-    "exampleReturns": "[{ \"playerid\": 1, \"points\": 10 }]",
-    "code": "CREATE OR REPLACE FUNCTION compute_sashimi(session_id INT) RETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH sashimi_count AS (\n        SELECT tc.playerid, COUNT(*) AS cnt\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id AND c.category = 'Sashimi'\n        GROUP BY tc.playerid\n    )\n    SELECT s.playerid, 10 * (s.cnt / 3)\n    FROM sashimi_count s;\nEND;\n$$ LANGUAGE plpgsql;"
+    "exampleReturns": "[ { \"playerid\": 10, \"points\": 10 }, { \"playerid\": 11, \"points\": 0 } ]",
+    "code": "CREATE OR REPLACE FUNCTION compute_sashimi(session_id INT)\nRETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH sashimi_count AS (\n        SELECT \n            tc.playerid AS playerid,\n            COUNT(*) AS cnt\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id\n          AND c.category = 'Sashimi'\n        GROUP BY tc.playerid\n    )\n    SELECT\n        sashimi_count.playerid AS playerid,\n        10 * ((sashimi_count.cnt)::int / 3)\n    FROM sashimi_count;\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "compute_wasabi",
-    "description": "Вычисляет дополнительные очки за использование карты 'Wasabi' с картами 'Nigiri'.",
+    "description": "Вычисляет дополнительные очки за нигири, уложенные на васаби (каждый нигири на васаби даёт удвоение базовых очков нигири).",
     "parameters": [
       {
         "name": "session_id",
         "type": "INT",
-        "description": "Идентификатор сессии."
+        "description": "Идентификатор игровой сессии."
       }
     ],
     "returns": "TABLE(playerid INT, points INT)",
     "usage": "SELECT * FROM compute_wasabi(123);",
-    "exampleReturns": "[{ \"playerid\": 1, \"points\": 4 }]",
-    "code": "CREATE OR REPLACE FUNCTION compute_wasabi(session_id INT) RETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH nigiri_on_wasabi AS (\n        SELECT tc.playerid, c.points AS nigiri_base\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        LEFT JOIN TableCards wt ON wt.tablecardid = tc.underTableCardid\n        LEFT JOIN SessionCards ws ON wt.sessioncardid = ws.sessioncardid\n        LEFT JOIN Cards w ON ws.cardid = w.cardid\n        WHERE sc.sessionid = session_id AND c.category = 'Nigiri' AND w.category = 'Wasabi'\n    )\n    SELECT n.playerid, SUM(n.nigiri_base * 2)\n    FROM nigiri_on_wasabi n\n    GROUP BY n.playerid;\nEND;\n$$ LANGUAGE plpgsql;"
+    "exampleReturns": "[ { \"playerid\": 10, \"points\": 2 }, { \"playerid\": 11, \"points\": 4 } ]",
+    "code": "CREATE OR REPLACE FUNCTION compute_wasabi(session_id INT)\nRETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH nigiri_on_wasabi AS (\n        SELECT \n            tc.playerid AS playerid,\n            c.points AS nigiri_base\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        LEFT JOIN TableCards wt ON wt.tablecardid = tc.under_tablecardid\n        LEFT JOIN SessionCards ws ON wt.sessioncardid = ws.sessioncardid\n        LEFT JOIN Cards w ON ws.cardid = w.cardid\n        WHERE sc.sessionid = session_id\n          AND c.category = 'Nigiri'\n          AND w.category = 'Wasabi'\n    )\n    SELECT\n        nigiri_on_wasabi.playerid AS playerid,\n        SUM(nigiri_on_wasabi.nigiri_base * 2)::int AS points\n    FROM nigiri_on_wasabi\n    GROUP BY nigiri_on_wasabi.playerid;\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "compute_nigiri",
-    "description": "Вычисляет базовые очки за карты 'Nigiri'.",
+    "description": "Суммирует базовые очки всех нигири (Nigiri) у каждого игрока в указанной сессии.",
     "parameters": [
       {
         "name": "session_id",
         "type": "INT",
-        "description": "Идентификатор сессии."
+        "description": "Идентификатор игровой сессии."
       }
     ],
     "returns": "TABLE(playerid INT, points INT)",
     "usage": "SELECT * FROM compute_nigiri(123);",
-    "exampleReturns": "[{ \"playerid\": 1, \"points\": 2 }]",
-    "code": "CREATE OR REPLACE FUNCTION compute_nigiri(session_id INT) RETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH nigiri_count AS (\n        SELECT tc.playerid, SUM(c.points) AS total_nigiri\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id AND c.category = 'Nigiri'\n        GROUP BY tc.playerid\n    )\n    SELECT n.playerid, n.total_nigiri\n    FROM nigiri_count n;\nEND;\n$$ LANGUAGE plpgsql;"
+    "exampleReturns": "[ { \"playerid\": 10, \"points\": 2 }, { \"playerid\": 11, \"points\": 3 } ]",
+    "code": "CREATE OR REPLACE FUNCTION compute_nigiri(session_id INT)\nRETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH nigiri_count AS (\n        SELECT \n            tc.playerid AS playerid,\n            SUM(c.points)::int AS total_nigiri\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id\n          AND c.category = 'Nigiri'\n        GROUP BY tc.playerid\n    )\n    SELECT \n        nigiri_count.playerid AS playerid,\n        nigiri_count.total_nigiri AS points\n    FROM nigiri_count;\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "compute_tempura",
-    "description": "Вычисляет очки за карты 'Tempura'. За каждые 2 карты дается 5 очков.",
+    "description": "За каждые две Tempura даёт 5 очков. Считает суммарные очки за темпуру для всех игроков сессии.",
     "parameters": [
       {
         "name": "session_id",
         "type": "INT",
-        "description": "Идентификатор сессии."
+        "description": "Идентификатор игровой сессии."
       }
     ],
     "returns": "TABLE(playerid INT, points INT)",
     "usage": "SELECT * FROM compute_tempura(123);",
-    "exampleReturns": "[{ \"playerid\": 1, \"points\": 5 }]",
-    "code": "CREATE OR REPLACE FUNCTION compute_tempura(session_id INT) RETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH tempura_count AS (\n        SELECT tc.playerid, COUNT(*) AS cnt\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id AND c.category = 'Tempura'\n        GROUP BY tc.playerid\n    )\n    SELECT t.playerid, 5 * (t.cnt / 2)\n    FROM tempura_count t;\nEND;\n$$ LANGUAGE plpgsql;"
+    "exampleReturns": "[ { \"playerid\": 10, \"points\": 5 }, { \"playerid\": 11, \"points\": 5 } ]",
+    "code": "CREATE OR REPLACE FUNCTION compute_tempura(session_id INT)\nRETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH tempura_count AS (\n        SELECT \n            tc.playerid AS playerid,\n            COUNT(*) AS cnt\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c        ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id\n          AND c.category = 'Tempura'\n        GROUP BY tc.playerid\n    )\n    SELECT\n        t.playerid,\n        5 * (t.cnt::int / 2)\n    FROM tempura_count t;\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "compute_dumpling",
-    "description": "Вычисляет очки за карты 'Dumpling'. Баллы зависят от количества карт: 1 карта = 1 очко, 2 карты = 3 очка, 3 карты = 6 очков, 4 карты = 10 очков, 5 и более = 15 очков.",
+    "description": "Подсчитывает сумму очков за Dumpling для каждого игрока, где каждая последующая пельмешка увеличивает общее количество очков (1, 3, 6, 10, 15).",
     "parameters": [
       {
         "name": "session_id",
         "type": "INT",
-        "description": "Идентификатор сессии."
+        "description": "Идентификатор игровой сессии."
       }
     ],
     "returns": "TABLE(playerid INT, points INT)",
     "usage": "SELECT * FROM compute_dumpling(123);",
-    "exampleReturns": "[{ \"playerid\": 1, \"points\": 6 }]",
-    "code": "CREATE OR REPLACE FUNCTION compute_dumpling(session_id INT) RETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH dumpling_count AS (\n        SELECT tc.playerid, COUNT(*) AS cnt\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id AND c.category = 'Dumpling'\n        GROUP BY tc.playerid\n    )\n    SELECT d.playerid, CASE d.cnt\n        WHEN 1 THEN 1\n        WHEN 2 THEN 3\n        WHEN 3 THEN 6\n        WHEN 4 THEN 10\n        WHEN 5 THEN 15\n        ELSE CASE WHEN d.cnt >= 5 THEN 15 ELSE 0 END\n    END AS points\n    FROM dumpling_count d;\nEND;\n$$ LANGUAGE plpgsql;"
+    "exampleReturns": "[ { \"playerid\": 10, \"points\": 3 }, { \"playerid\": 11, \"points\": 10 } ]",
+    "code": "CREATE OR REPLACE FUNCTION compute_dumpling(session_id INT)\nRETURNS TABLE(playerid INT, points INT) AS $$\nBEGIN\n    RETURN QUERY\n    WITH dumpling_count AS (\n        SELECT\n            tc.playerid,\n            COUNT(*) AS cnt\n        FROM TableCards tc\n        JOIN SessionCards sc ON tc.sessioncardid = sc.sessioncardid\n        JOIN Cards c        ON sc.cardid = c.cardid\n        WHERE sc.sessionid = session_id\n          AND c.category = 'Dumpling'\n        GROUP BY tc.playerid\n    )\n    SELECT\n        d.playerid,\n        CASE d.cnt\n          WHEN 1 THEN 1\n          WHEN 2 THEN 3\n          WHEN 3 THEN 6\n          WHEN 4 THEN 10\n          WHEN 5 THEN 15\n          ELSE \n            CASE WHEN d.cnt >= 5 THEN 15 ELSE 0 END\n        END AS points\n    FROM dumpling_count d;\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "score_round",
-    "description": "Подсчитывает очки за раунд по всем категориям, обновляет таблицу playerscores и возвращает итоговые очки каждого игрока в формате JSON.",
+    "description": "Подсчитывает очки за раунд (по всем категориям) для всех игроков данной сессии и обновляет таблицу playerscores. Возвращает итоговый счёт каждого игрока.",
     "parameters": [
       {
         "name": "session_id",
         "type": "INT",
-        "description": "Идентификатор сессии."
+        "description": "Идентификатор игровой сессии."
       }
     ],
     "returns": "JSON",
     "usage": "SELECT score_round(123);",
-    "exampleReturns": "[{ \"playerid\": 1, \"score\": 25 }, { \"playerid\": 2, \"score\": 20 }]",
-    "code": "CREATE OR REPLACE FUNCTION score_round(session_id INT) RETURNS JSON AS $$\nDECLARE\n    rec RECORD;\n    final_result JSON;\nBEGIN\n    -- Подсчет очков за Maki Roll\n    FOR rec IN SELECT * FROM compute_maki_rolls(session_id) LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n    -- Подсчет очков за Tempura\n    FOR rec IN SELECT * FROM compute_tempura(session_id) LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n    -- Подсчет очков за Sashimi\n    FOR rec IN SELECT * FROM compute_sashimi(session_id) LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n    -- Подсчет очков за Dumpling\n    FOR rec IN SELECT * FROM compute_dumpling(session_id) LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n    -- Подсчет очков за Nigiri\n    FOR rec IN SELECT * FROM compute_nigiri(session_id) LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n    -- Подсчет дополнительных очков за Wasabi\n    FOR rec IN SELECT * FROM compute_wasabi(session_id) LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n    RAISE NOTICE 'Все очки для сессии % обновлены', session_id;\n    WITH final_scores AS (\n        SELECT ps.playerid, ps.score\n        FROM playerscores ps\n        JOIN Players p ON p.playerid = ps.playerid\n        WHERE p.sessionid = session_id\n    )\n    SELECT json_agg(json_build_object('playerid', playerid, 'score', score)) INTO final_result FROM final_scores;\n    RETURN final_result;\nEND;\n$$ LANGUAGE plpgsql;"
+    "exampleReturns": "[ { \"playerid\": 10, \"score\": 15 }, { \"playerid\": 11, \"score\": 12 } ]",
+    "code": "CREATE OR REPLACE FUNCTION score_round(session_id INT)\nRETURNS JSON AS $$\nDECLARE\n    rec RECORD;\n    final_result JSON;\nBEGIN\n    -- 1) Maki Rolls\n    FOR rec IN SELECT * FROM compute_maki_rolls(session_id)\n    LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n\n    -- 2) Tempura\n    FOR rec IN SELECT * FROM compute_tempura(session_id)\n    LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n\n    -- 3) Sashimi\n    FOR rec IN SELECT * FROM compute_sashimi(session_id)\n    LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n\n    -- 4) Dumpling\n    FOR rec IN SELECT * FROM compute_dumpling(session_id)\n    LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n\n    -- 5) Nigiri (базовые очки)\n    FOR rec IN SELECT * FROM compute_nigiri(session_id)\n    LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n\n    -- 6) Wasabi (доп. множитель)\n    FOR rec IN SELECT * FROM compute_wasabi(session_id)\n    LOOP\n        INSERT INTO playerscores (playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n\n    RAISE NOTICE 'Все очки за категории подсчитаны и обновлены для сессии %', session_id;\n\n    -- 7) Возвращаем JSON-массив с итоговыми очками всех игроков\n    WITH final_scores AS (\n        SELECT ps.playerid, ps.score\n        FROM playerscores ps\n        JOIN Players p ON p.playerid = ps.playerid\n        WHERE p.sessionid = session_id\n    )\n    SELECT json_agg(json_build_object('playerid', final_scores.playerid, 'score', final_scores.score))\n    INTO final_result\n    FROM final_scores;\n\n    RETURN final_result;\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "compute_pudding",
@@ -473,6 +599,21 @@
     "usage": "SELECT final_scoring_pudding(123);",
     "exampleReturns": "[{ \"playerid\": 1, \"pudding_points\": 6 }]",
     "code": "CREATE OR REPLACE FUNCTION final_scoring_pudding(session_id INT) RETURNS JSON AS $$\nDECLARE\n    rec RECORD;\n    pudding_json JSON;\nBEGIN\n    FOR rec IN SELECT * FROM compute_pudding(session_id) LOOP\n        INSERT INTO playerscores(playerid, score)\n        VALUES (rec.playerid, rec.points)\n        ON CONFLICT (playerid)\n        DO UPDATE SET score = playerscores.score + EXCLUDED.score;\n    END LOOP;\n    SELECT json_agg(json_build_object('playerid', playerid, 'pudding_points', points))\n    INTO pudding_json\n    FROM compute_pudding(session_id);\n    RETURN pudding_json;\nEND;\n$$ LANGUAGE plpgsql;"
+  },
+  {
+    "name": "get_players_score",
+    "description": "Возвращает итоговые очки игроков (из таблицы playerscores) вместе с их именами (из таблицы users) в рамках указанной сессии.",
+    "parameters": [
+      {
+        "name": "_session_id",
+        "type": "INT",
+        "description": "Идентификатор игровой сессии."
+      }
+    ],
+    "returns": "JSON",
+    "usage": "SELECT get_players_score(123);",
+    "exampleReturns": "{ \"sessionid\": 123, \"players\": [ { \"username\": \"UserA\", \"score\": 15 }, ... ] }",
+    "code": "CREATE OR REPLACE FUNCTION get_players_score(_session_id INT)\nRETURNS JSON AS $$\nDECLARE\n  result JSON;\nBEGIN\n  SELECT json_build_object(\n    'sessionid', _session_id,\n    'players', COALESCE((\n      SELECT json_agg(player_data)\n      FROM (\n        SELECT u.username, ps.score\n        FROM players p\n        JOIN playerscores ps ON p.playerid = ps.playerid\n        JOIN users u ON p.userid = u.userid\n        WHERE p.sessionid = _session_id\n        ORDER BY ps.score DESC\n      ) AS player_data\n    ), '[]'::json)\n  )\n  INTO result;\n\n  RETURN result;\nEND;\n$$ LANGUAGE plpgsql;"
   },
   {
     "name": "end_game_session",
