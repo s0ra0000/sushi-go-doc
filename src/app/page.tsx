@@ -158,38 +158,29 @@ SELECT create_session('<alice_token_uuid>', 'SaturdayGame', 30, 4);
 -- 4) GET SESSIONS
 SELECT get_sessions('<alice_token_uuid>');
 
--- 5) JOIN SESSION
+-- 5) GET SESSION BY ID
+SELECT get_session('<alice_token_uuid>', <session_id>);
+
+-- 6) JOIN SESSION
 SELECT join_session('<bob_token_uuid>', <session_id>);
 
--- 6) GET SESSION PLAYERS
-SELECT get_session_players('<alice_token_uuid>', <session_id>);
+-- 7) LEAVE SESSION
+SELECT leave_session('<bob_token_uuid>', <session_id>);
 
--- 7) START SESSION
-SELECT start_session(<session_id>);
+-- 8) DELETE SESSION
+SELECT delete_session('<bob_token_uuid>', <session_id>);
 
--- 8) GET PLAYER CARDS
+-- 9) GET PLAYER CARDS
 SELECT get_player_cards('<bob_token_uuid>', <session_id>);
 
--- 9) GET PLAYER TABLE CARDS
+-- 10) GET PLAYER TABLE CARDS
 SELECT get_player_table_cards('<bob_token_uuid>', <session_id>);
 
--- 10) PLACE CARD ON TABLE
+-- 11) PLACE CARD ON TABLE
 SELECT place_card_on_table('<bob_token_uuid>', <session_id>, <sessioncard_id>);
 
--- 11) PASS CARDS
-SELECT pass_cards(<session_id>);
-
--- 12) SCORE ROUND
-SELECT score_round(<session_id>);
-
--- 13) START NEW ROUND
-SELECT start_new_round(<session_id>);
-
--- 14) END GAME SESSION (after the final round)
-SELECT end_game_session('<alice_token_uuid>', <session_id>);
-
--- 15) GET PLAYERS SCORE
-SELECT get_players_score(<session_id>);
+-- 12) GET PLAYERS SCORE
+SELECT get_player_scores('<bob_token_uuid>', <session_id>)
 `;
 
   const handleCopy = () => {
@@ -260,10 +251,10 @@ SELECT get_players_score(<session_id>);
               <strong>Database:</strong> neondb
             </li>
             <li>
-              <strong>User:</strong> neondb_owner
+              <strong>User:</strong> client
             </li>
             <li>
-              <strong>Password:</strong> npg_tw0C7qaYGVpD
+              <strong>Password:</strong> npg_npI9cNyjbe2M
             </li>
           </ul>
         </section>
